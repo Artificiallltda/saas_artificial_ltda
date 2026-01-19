@@ -55,11 +55,11 @@ export default function ChatControls({
     };
   });
 
-  // 2) ocultação específica para Gemini por plano (não aplicaremos ocultação no Básico; apenas bloqueio visual)
+  // 2) ocultação específica para Gemini por plano (não ocultar Flash Lite em nenhum plano)
   const HIDE_GEMINI_BY_PLAN = {
-    "Básico": new Set(["gemini-2.5-pro", "gemini-2.5-flash-lite"]),
-    "Pro": new Set(["gemini-2.5-pro", "gemini-2.5-flash-lite"]),
-    "Premium": new Set(["gemini-2.5-pro", "gemini-2.5-flash-lite"]),
+    "Básico": new Set(["gemini-2.5-pro"]),
+    "Pro": new Set(["gemini-2.5-pro"]),
+    "Premium": new Set(["gemini-2.5-pro"]),
   };
   const hiddenValues = (planNameLower === "básico" || planNameLower === "basico") ? new Set() : (HIDE_GEMINI_BY_PLAN[planName] || new Set());
 
