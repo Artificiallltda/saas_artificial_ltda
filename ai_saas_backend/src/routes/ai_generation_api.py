@@ -75,6 +75,23 @@ def resolve_perplexity_try_models(model: str) -> list[str]:
         chain += ["sonar-reasoning", "sonar"]
     return chain
 
+def is_model_allowed_for_basic_plan(model: str) -> bool:
+    # Básico: gpt-4o, deepseek/deepseek-r1-0528:free, sonar, sonar-reasoning, claude-haiku-4-5 (inclui snapshots)
+    if not model:
+        return False
+    m = model.strip().lower()
+    if m == "gpt-4o":
+        return True
+    if m == "deepseek/deepseek-r1-0528:free":
+        return True
+    if m in ("sonar", "sonar-reasoning"):
+        return True
+    if m.startswith("claude-haiku-4-5"):
+        return True
+    if m == "gemini-2.5-flash-lite":
+        return True
+    return False
+
 def supports_vision(model: str) -> bool:
     res = model.startswith("gpt-4o") or model.startswith("o") or model.startswith("gpt-5") or is_gemini_model(model)
     print(f"[DEBUG] supports_vision({model}) -> {res}")
@@ -309,6 +326,26 @@ def generate_text():
             return jsonify({"error": "É necessário enviar uma mensagem ou anexos."}), 400
 
         user_id = get_jwt_identity()
+
+        # Restrição por plano: Básico só pode usar modelos permitidos
+        try:
+            user = User.query.get(user_id)
+            plan_name = (user.plan.name if user and user.plan else "").strip().lower()
+        except Exception as _e:
+            plan_name = ""
+        if plan_name in ("básico", "basico"):
+            if not is_model_allowed_for_basic_plan(model):
+                return jsonify({
+                    "error": "Modelo não disponível no plano Básico",
+                    "allowed_models": [
+                        "gpt-4o",
+                        "deepseek/deepseek-r1-0528:free",
+                        "sonar",
+                        "sonar-reasoning",
+                        "claude-haiku-4-5",
+                        "gemini-2.5-flash-lite"
+                    ]
+                }), 403
 
         # Buscar chat existente ou criar novo
         chat = Chat.query.filter_by(id=chat_id, user_id=user_id).first() if chat_id else None
