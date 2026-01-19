@@ -7,6 +7,7 @@ from flask_jwt_extended import get_jwt_identity
 import os, uuid, base64, requests, time
 from datetime import datetime
 from dotenv import load_dotenv
+from pathlib import Path
 from google import genai
 from google.genai import types
 from openai import OpenAI
@@ -15,15 +16,25 @@ from PIL import Image
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+def _mask_key(k: str) -> str:
+    if not k:
+        return "EMPTY(len=0)"
+    return f"{k[:8]}...(len={len(k)})"
+
+def _get_env_keys():
+    return {
+        "OPENAI_API_KEY": (os.getenv("API_KEY") or "").strip(),
+        "OPENROUTER_API_KEY": (os.getenv("OPENROUTER_API_KEY") or "").strip(),
+        "GEMINI_API_KEY": (os.getenv("GEMINI_API_KEY") or "").strip(),
+        "ANTHROPIC_API_KEY": (os.getenv("ANTHROPIC_API_KEY") or "").strip(),
+        "PERPLEXITY_API_KEY": (os.getenv("PERPLEXITY_API_KEY") or "").strip(),
+    }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # pasta src
 UPLOAD_DIR = os.path.join(BASE_DIR, "..", "static", "uploads")
 UPLOAD_DIR = os.path.abspath(UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-client_gemini = genai.Client(api_key=GEMINI_API_KEY)
 ai_generation_api = Blueprint("ai_generation_api", __name__)
 
 GEMINI_MODELS = ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro-preview")
@@ -46,6 +57,40 @@ def is_openrouter_model(model: str) -> bool:
 
 def uses_completion_tokens_for_openai(model: str) -> bool:
     return model.startswith("o") or model.startswith("gpt-5")
+
+def is_anthropic_model(model: str) -> bool:
+    return bool(model) and model.startswith("claude-")
+
+def is_perplexity_model(model: str) -> bool:
+    return bool(model) and model.startswith("sonar")
+
+def resolve_perplexity_try_models(model: str) -> list[str]:
+    chain = [model]
+    if model == "sonar-reasoning-pro":
+        chain += ["sonar-reasoning", "sonar"]
+    elif model == "sonar-reasoning":
+        chain += ["sonar"]
+    elif model == "sonar-deep-research":
+        # deep-research pode exigir superfície/endpoint diferentes; fallback para sonar
+        chain += ["sonar-reasoning", "sonar"]
+    return chain
+
+def is_model_allowed_for_basic_plan(model: str) -> bool:
+    # Básico: gpt-4o, deepseek/deepseek-r1-0528:free, sonar, sonar-reasoning, claude-haiku-4-5 (inclui snapshots)
+    if not model:
+        return False
+    m = model.strip().lower()
+    if m == "gpt-4o":
+        return True
+    if m == "deepseek/deepseek-r1-0528:free":
+        return True
+    if m in ("sonar", "sonar-reasoning"):
+        return True
+    if m.startswith("claude-haiku-4-5"):
+        return True
+    if m == "gemini-2.5-flash-lite":
+        return True
+    return False
 
 def supports_vision(model: str) -> bool:
     res = model.startswith("gpt-4o") or model.startswith("o") or model.startswith("gpt-5") or is_gemini_model(model)
@@ -170,6 +215,27 @@ def build_messages_for_openai(session_messages, model: str):
 def build_messages_for_openrouter(session_messages, model: str):
     return build_messages_for_openai(session_messages, model)
 
+def build_messages_for_anthropic(session_messages):
+    msgs = []
+    for m in session_messages:
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", "user")
+        text = m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+        if not text:
+            continue
+        msgs.append({
+            "role": role,  # "user" | "assistant"
+            "content": [{"type": "text", "text": text}]
+        })
+    return msgs
+
+def extract_text_from_anthropic(resp_json):
+    blocks = resp_json.get("content", []) or []
+    texts = []
+    for b in blocks:
+        if b.get("type") == "text":
+            texts.append(b.get("text", ""))
+    return "\n".join([t for t in texts if t])
+
 def make_request_with_retry(url, headers, body, max_retries=5, backoff=3):
     for attempt in range(max_retries):
         response = requests.post(url, headers=headers, json=body, timeout=120)
@@ -201,6 +267,15 @@ def send_with_retry_gemini(chat, message, retries=5, delay=2):
 @jwt_required()
 def generate_text():
     try:
+        # lê chaves atualizadas do ambiente a cada requisição
+        env_keys = _get_env_keys()
+        OPENAI_API_KEY = env_keys["OPENAI_API_KEY"]
+        OPENROUTER_API_KEY = env_keys["OPENROUTER_API_KEY"]
+        GEMINI_API_KEY = env_keys["GEMINI_API_KEY"]
+        ANTHROPIC_API_KEY = env_keys["ANTHROPIC_API_KEY"]
+        PERPLEXITY_API_KEY = env_keys["PERPLEXITY_API_KEY"]
+        print(f"[CFG] Anthropic key: {_mask_key(ANTHROPIC_API_KEY)}")
+
         response = None  # evita NameError em fluxos sem resposta HTTP
         ct = request.content_type or ""
         files_to_save = []
@@ -251,6 +326,26 @@ def generate_text():
             return jsonify({"error": "É necessário enviar uma mensagem ou anexos."}), 400
 
         user_id = get_jwt_identity()
+
+        # Restrição por plano: Básico só pode usar modelos permitidos
+        try:
+            user = User.query.get(user_id)
+            plan_name = (user.plan.name if user and user.plan else "").strip().lower()
+        except Exception as _e:
+            plan_name = ""
+        if plan_name in ("básico", "basico"):
+            if not is_model_allowed_for_basic_plan(model):
+                return jsonify({
+                    "error": "Modelo não disponível no plano Básico",
+                    "allowed_models": [
+                        "gpt-4o",
+                        "deepseek/deepseek-r1-0528:free",
+                        "sonar",
+                        "sonar-reasoning",
+                        "claude-haiku-4-5",
+                        "gemini-2.5-flash-lite"
+                    ]
+                }), 403
 
         # Buscar chat existente ou criar novo
         chat = Chat.query.filter_by(id=chat_id, user_id=user_id).first() if chat_id else None
@@ -323,16 +418,16 @@ def generate_text():
         generated_text = ""
         try:
             if is_gemini_model(model):
+                gemini_client = genai.Client(api_key=GEMINI_API_KEY)
                 gemini_chat = None
                 parts = []
                 uploaded_images = []
 
                 try:
                     print(f"[INFO] Inicializando chat Gemini para chat_id {chat.id}")
-                    # gemini_chat = client_gemini.chats.create(model=model)
 
                     gm = resolve_gemini_model(model)
-                    gemini_chat = client_gemini.chats.create(model=gm)
+                    gemini_chat = gemini_client.chats.create(model=gm)
                     used_model = gm
 
                     # histórico
@@ -349,7 +444,7 @@ def generate_text():
                             if not path or not os.path.exists(path):
                                 continue
                             if mimetype.startswith("image/"):
-                                uploaded_file = client_gemini.files.upload(file=path)
+                                uploaded_file = gemini_client.files.upload(file=path)
                                 parts.append(uploaded_file)
                             elif mimetype == "application/pdf":
                                 with open(path, "rb") as f:
@@ -371,7 +466,7 @@ def generate_text():
                                 "Responda apenas SIM ou NÃO.\n\n"
                                 f"{prompt}"
                             )
-                            resp = client_gemini.models.generate_content(
+                            resp = gemini_client.models.generate_content(
                                 model=(model if is_gemini_model(model) else "gemini-2.5-flash"),
                                 contents=analysis_prompt
                             )
@@ -410,7 +505,7 @@ def generate_text():
                     if user_asked_image and not generated_images_paths:
                         try:
                             print("[INFO] Gerando imagem via API do Gemini...")
-                            img_response = client_gemini.models.generate_images(
+                            img_response = gemini_client.models.generate_images(
                                 model="imagen-4.0-fast-generate-001",
                                 prompt=user_input,
                                 config=types.GenerateImagesConfig(
@@ -460,6 +555,117 @@ def generate_text():
                 except Exception as oe:
                     print(f"[ERROR] Falha na chamada OpenRouter: {oe}")
                     generated_text = "[Erro ao gerar resposta da IA]"
+
+            elif is_anthropic_model(model):
+                def call_anthropic(model_id: str):
+                    endpoint = "https://api.anthropic.com/v1/messages"
+                    headers = {
+                        "x-api-key": ANTHROPIC_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json"
+                    }
+                    system_msg = generate_system_message(model_id)["content"]
+                    body = {
+                        "model": model_id,
+                        "max_tokens": 1024,
+                        "temperature": temperature,
+                        "system": system_msg,
+                        "messages": build_messages_for_anthropic(session_messages),
+                    }
+                    return make_request_with_retry(endpoint, headers, body, max_retries=5, backoff=3)
+
+                try_models = [model]
+                if model == "claude-opus-4-5":
+                    try_models += ["claude-sonnet-4-5", "claude-haiku-4-5"]
+
+                generated_text = ""
+                for mid in try_models:
+                    try:
+                        response = call_anthropic(mid)
+                    except Exception as ae:
+                        print(f"[ERROR] Falha na chamada Anthropic ({mid}): {ae}")
+                        if mid == try_models[-1]:
+                            generated_text = "[Erro ao gerar resposta da IA]"
+                        continue
+
+                    status = getattr(response, "status_code", 0)
+                    data = None
+                    try:
+                        data = response.json()
+                    except Exception:
+                        data = None
+
+                    if status == 200 and data:
+                        txt = extract_text_from_anthropic(data) or ""
+                        if not txt:
+                            content = data.get("content", [])
+                            if isinstance(content, list) and content and isinstance(content[0], dict):
+                                txt = content[0].get("text") or ""
+                        if txt:
+                            used_model = mid
+                            generated_text = txt
+                            break
+                        else:
+                            print(f"[WARN] Anthropic sem texto (model={mid}) payload={str(data)[:500]}")
+                            if mid == try_models[-1]:
+                                generated_text = "[Sem retorno]"
+                    else:
+                        err_msg = None
+                        if data and isinstance(data, dict):
+                            err = data.get("error") or {}
+                            err_msg = err.get("message") or str(err) or response.text[:500]
+                        else:
+                            err_msg = getattr(response, "text", "")[:500]
+                        print(f"[ERROR] Anthropic {status} ({mid}): {err_msg}")
+                        # Se não for o último, tenta próximo; no último, devolve erro amigável
+                        if mid == try_models[-1]:
+                            generated_text = f"[Erro Anthropic {status}: {err_msg}]"
+
+            elif is_perplexity_model(model):
+                try_models = resolve_perplexity_try_models(model)
+                generated_text = ""
+                for mid in try_models:
+                    endpoint = "https://api.perplexity.ai/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                    body = {
+                        "model": mid,  # "sonar" | "sonar-reasoning" | "sonar-reasoning-pro" | "sonar-deep-research"
+                        "messages": build_messages_for_openai(session_messages, mid),
+                        "temperature": temperature,
+                        "return_citations": True
+                    }
+                    try:
+                        response = make_request_with_retry(endpoint, headers, body, max_retries=5, backoff=3)
+                        status = getattr(response, "status_code", 0)
+                        if status == 200:
+                            try:
+                                generated_text = response.json().get("choices", [{}])[0].get("message", {}).get("content", "[Sem retorno]")
+                            except Exception:
+                                print(f"[WARN] Resposta Perplexity não é JSON:\n{response.text[:1000]}")
+                                generated_text = "[Erro ao gerar resposta da IA]"
+                            used_model = mid
+                            break
+                        else:
+                            # detecção de erro e fallback para próximo modelo
+                            err_text = ""
+                            try:
+                                err_json = response.json()
+                                err_text = str(err_json)[:500]
+                            except Exception:
+                                err_text = (getattr(response, "text", "") or "")[:500]
+                            print(f"[ERROR] Perplexity {status} ({mid}): {err_text}")
+                            if mid == try_models[-1]:
+                                generated_text = f"[Erro Perplexity {status}: {err_text}]"
+                            else:
+                                continue
+                    except Exception as pe:
+                        print(f"[ERROR] Falha na chamada Perplexity ({mid}): {pe}")
+                        if mid == try_models[-1]:
+                            generated_text = "[Erro ao gerar resposta da IA]"
+                        else:
+                            continue
 
             else:
                 endpoint = "https://api.openai.com/v1/chat/completions"
@@ -613,6 +819,12 @@ def map_aspectratio_gemini(ratio):
 @ai_generation_api.route("/generate-image", methods=["POST"])
 @jwt_required()
 def generate_image():
+    # lê chaves atualizadas do ambiente
+    env_keys = _get_env_keys()
+    OPENAI_API_KEY = env_keys["OPENAI_API_KEY"]
+    GEMINI_API_KEY = env_keys["GEMINI_API_KEY"]
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     if not user:
@@ -664,7 +876,9 @@ def generate_image():
             final_ratio = size
         else:
             config_map = map_aspectratio_gemini(ratio)
-            response = client_gemini.models.generate_images(
+            if not gemini_client:
+                return jsonify({"error": "GEMINI_API_KEY ausente"}), 500
+            response = gemini_client.models.generate_images(
                 model=model,
                 prompt=final_prompt,
                 config=types.GenerateImagesConfig(

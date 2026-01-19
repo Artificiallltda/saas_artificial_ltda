@@ -40,6 +40,7 @@ export default function ChatControls({
 
   // nome do plano para regras de exibição (ex.: "Básico" | "Pro" | "Premium")
   const planName = user?.id ? (user?.plan?.name || "") : "";
+  const planNameLower = planName.toLowerCase();
 
   // 1) gating por feature (requiredFeature p/ modelos como Gemini) e por generate_text (G* avançados)
   const canUseGpt5 = !!featuresMap["generate_text"];
@@ -54,18 +55,35 @@ export default function ChatControls({
     };
   });
 
-  // 2) ocultação específica para Gemini por plano:
-  // - Básico: ocultar 2.5 Pro e 2.5 Flash Lite
-  // - Pro/Premium: ocultar 2.5 Pro e 2.5 Flash Lite
+  // 2) ocultação específica para Gemini por plano (não ocultar Flash Lite em nenhum plano)
   const HIDE_GEMINI_BY_PLAN = {
-    "Básico": new Set(["gemini-2.5-pro", "gemini-2.5-flash-lite"]),
-    "Pro": new Set(["gemini-2.5-pro", "gemini-2.5-flash-lite"]),
-    "Premium": new Set(["gemini-2.5-pro", "gemini-2.5-flash-lite"]),
+    "Básico": new Set(["gemini-2.5-pro"]),
+    "Pro": new Set(["gemini-2.5-pro"]),
+    "Premium": new Set(["gemini-2.5-pro"]),
   };
-  const hiddenValues = HIDE_GEMINI_BY_PLAN[planName] || new Set();
+  const hiddenValues = (planNameLower === "básico" || planNameLower === "basico") ? new Set() : (HIDE_GEMINI_BY_PLAN[planName] || new Set());
 
-  // 3) aplica ocultação só nos que devem sumir; demais modelos (incluindo GPT/OpenRouter) permanecem
-  const allowedModels = baseModels.filter((m) => !hiddenValues.has(m.value));
+  // 3) regras de plano Básico: exibir todos os modelos, mas bloquear os não permitidos
+  const BASIC_ALLOWED = new Set([
+    "gpt-4o",
+    "deepseek/deepseek-r1-0528:free",
+    "sonar",
+    "sonar-reasoning",
+    "claude-haiku-4-5",
+    "gemini-2.5-flash-lite",
+  ]);
+
+  // aplica ocultação (se houver) e, se for Básico, marca como bloqueado os não permitidos (sem ocultar)
+  const afterHidden = baseModels.filter((m) => !hiddenValues.has(m.value));
+  const allowedModels = (planNameLower === "básico" || planNameLower === "basico")
+    ? afterHidden.map((m) => ({
+        ...m,
+        isAllowed: BASIC_ALLOWED.has(m.value),
+        tooltip: BASIC_ALLOWED.has(m.value)
+          ? ""
+          : "Disponível nos planos Pro/Premium",
+      }))
+    : afterHidden;
 
   // 4) se o modelo atual não está disponível para o plano, ajusta para o primeiro permitido
   useEffect(() => {
