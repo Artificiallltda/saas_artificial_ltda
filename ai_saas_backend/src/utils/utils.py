@@ -56,21 +56,25 @@ def create_default_plans():
 
         for key, f in feature_objs.items():
             existing = PlanFeature.query.filter_by(plan_id=plan.id, feature_id=f.id).first()
-            if not existing:
-                # Regras por plano
-                if key in GEMINI_KEYS:
-                    if plan.name == "Básico":
-                        allow = key in {"gemini_25_pro", "gemini_25_flash_lite"}
-                    elif plan.name in ("Pro", "Premium"):
-                        allow = key in {"gemini_30", "gemini_25_flash"}
-                    else:
-                        allow = False
-                    value = "true" if allow else "false"
+            # Regras por plano (sempre aplicadas, atualizando se já existir)
+            if key in GEMINI_KEYS:
+                if plan.name == "Básico":
+                    allow = key in {"gemini_25_pro", "gemini_25_flash_lite"}
+                elif plan.name in ("Pro", "Premium"):
+                    # Liberar Flash Lite também no Pro/Premium
+                    allow = key in {"gemini_30", "gemini_25_flash", "gemini_25_flash_lite"}
                 else:
-                    # Regra anterior mantida para as outras features
-                    value = "false" if (plan.name == "Básico" and key == "generate_text") else "true"
+                    allow = False
+                value = "true" if allow else "false"
+            else:
+                # Mantém regra anterior para demais features
+                value = "false" if (plan.name == "Básico" and key == "generate_text") else "true"
 
+            if not existing:
                 pf = PlanFeature(plan_id=plan.id, feature_id=f.id, value=value)
                 db.session.add(pf)
+            else:
+                if existing.value != value:
+                    existing.value = value
 
     db.session.commit()

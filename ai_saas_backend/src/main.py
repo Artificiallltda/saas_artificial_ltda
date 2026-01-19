@@ -4,6 +4,7 @@ from flask_limiter.errors import RateLimitExceeded
 from flask_jwt_extended.exceptions import RevokedTokenError
 from flask_migrate import Migrate
 from dotenv import load_dotenv
+from pathlib import Path
 from extensions import bcrypt, jwt, db, limiter, jwt_required, get_jwt_identity, create_access_token
 from utils import check_if_token_revoked, create_default_plans
 from routes import user_api, admin_api, auth_api, email_api, profile_api, project_api, generated_content_api, notification_api, plan_api, ai_generation_api, ai_generation_video_api, chat_api
@@ -13,7 +14,7 @@ import os, uuid
 load_dotenv()
 
 app = Flask(__name__)
-CORS(
+CORS(   
     app,
     supports_credentials=True,  
     origins=[
