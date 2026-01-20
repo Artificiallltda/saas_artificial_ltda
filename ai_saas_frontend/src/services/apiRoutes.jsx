@@ -1,4 +1,9 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL + "/api";
+// Normaliza a base da API e aplica fallback seguro
+const rawBase = (import.meta.env.VITE_API_BASE_URL ?? "").toString().trim();
+// remove barras finais para evitar "//api"
+const normalizedBase = rawBase.replace(/\/+$/, "");
+// se não houver base definida, usa caminho relativo (mesma origem) -> "/api"
+const API_BASE = `${normalizedBase}/api`;
 
 
 export const authRoutes = {
