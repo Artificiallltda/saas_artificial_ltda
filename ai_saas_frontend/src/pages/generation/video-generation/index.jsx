@@ -5,8 +5,58 @@ import CustomSelect from '../../../components/common/CustomSelect';
 import { Download, Send, Loader2, Video as VideoIcon, Settings } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { aiRoutes, generatedContentRoutes, userRoutes } from '../../../services/apiRoutes';
-import { apiFetch } from '../../../services/apiService';
+import { apiFetch, getCsrfToken } from '../../../services/apiService';
 import { VIDEO_MODELS, VIDEO_RATIOS } from '../../../utils/constants';
+
+async function generateVideoWithFallback(payload) {
+  // prioriza o modelo escolhido e cria fallback com modelos conhecidos
+  const preferred = payload?.model_used;
+  const fallback = [
+    'veo-3.1-generate-preview',
+    'veo-3.1-fast-generate-preview',
+    'veo-3.0-generate-001',
+    'veo-3.0-fast-generate-001',
+  ];
+  const candidates = Array.from(new Set([preferred, ...fallback].filter(Boolean)));
+  const csrf = getCsrfToken();
+
+  for (const model of candidates) {
+    const res = await fetch(aiRoutes.generateVideo, {
+      method: 'POST',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(csrf ? { 'X-CSRF-TOKEN': csrf } : {}),
+      },
+      body: JSON.stringify({ ...payload, model_used: model }),
+    });
+
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '15', 10);
+      await new Promise(r => setTimeout(r, retryAfter * 1000));
+      continue; // tenta o próximo candidato após aguardar
+    }
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      // pula modelos que exigem billing GCP ou não disponíveis
+      if (/GCP billing|FAILED_PRECONDITION|NOT_FOUND|is not found/i.test(text)) {
+        continue;
+      }
+      throw new Error(text || `Falha (${res.status})`);
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error('Resposta não é JSON');
+    }
+  }
+
+  throw new Error('Nenhum modelo disponível agora. Tente novamente mais tarde.');
+}
 
 function VideoGeneration() {
   const [prompt, setPrompt] = useState("");
@@ -34,11 +84,7 @@ function VideoGeneration() {
         return;
       }
 
-      const res = await apiFetch(aiRoutes.generateVideo, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, model_used: model, ratio }),
-      });
+      const res = await generateVideoWithFallback({ prompt, model_used: model, ratio });
 
       if (res?.error) {
         toast.error(res.error);
@@ -158,7 +204,7 @@ function VideoGeneration() {
               rows={5}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              className="w-full pl-4 pr-4 py-2 rounded-lg border text-black border-gray-300 text-sm shadow-sm focus:outline-none focus:shadow-md mt-6"
+              className="w-full pl-4 pr-4 py-2 rounded-lg border text黑 border-gray-300 text-sm shadow-sm focus:outline-none focus:shadow-md mt-6"
             />
             <div className="flex justify-between items-center mt-6">
               <p className={`${styles.statSubtext} text-sm`}>{prompt.length} caracteres</p>
