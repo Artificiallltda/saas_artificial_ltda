@@ -23,6 +23,25 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "..", "static", "uploads")
 VIDEO_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "videos")
 os.makedirs(VIDEO_UPLOAD_DIR, exist_ok=True)
 
+
+def _candidate_models(model_used: str):
+    models = [model_used]
+    # Fallbacks sugeridos: 3.1 (preview) -> 3.0 fast -> 3.0
+    if model_used.startswith("veo-3.1"):
+        if "fast" in model_used:
+            models.append("veo-3.0-fast-generate-001")
+            models.append("veo-3.0-generate-001")
+        else:
+            models.append("veo-3.0-generate-001")
+            models.append("veo-3.0-fast-generate-001")
+    # fallback geral adicional
+    if "veo-3.0-fast-generate-001" not in models:
+        models.append("veo-3.0-fast-generate-001")
+    if "veo-3.0-generate-001" not in models:
+        models.append("veo-3.0-generate-001")
+    return models
+
+
 @ai_generation_video_api.route("/generate-video", methods=["POST"])
 @jwt_required()
 def generate_video():
@@ -44,12 +63,44 @@ def generate_video():
         save_path = os.path.join(VIDEO_UPLOAD_DIR, filename)
         print(f"[DEBUG] Gerando vídeo com modelo {model_used}, ratio {aspect_ratio}...")
 
-        # Cria operação assíncrona
-        operation = client_gemini.models.generate_videos(
-            model=model_used,
-            prompt=prompt,
-            config=types.GenerateVideosConfig(aspect_ratio=aspect_ratio)
-        )
+        # Tenta modelo preferido + fallbacks
+        candidates = _candidate_models(model_used)
+        operation = None
+        last_err_text = ""
+        saw_quota_error = False
+        saw_not_found = False
+
+        for m in candidates:
+            try:
+                print(f"[DEBUG] Tentando modelo {m}...")
+                operation = client_gemini.models.generate_videos(
+                    model=m,
+                    prompt=prompt,
+                    config=types.GenerateVideosConfig(aspect_ratio=aspect_ratio)
+                )
+                model_used = m  # efetivamente usado
+                break
+            except Exception as ex:
+                err_text = str(ex)
+                last_err_text = err_text
+                # 429 / quota
+                if "RESOURCE_EXHAUSTED" in err_text or "rate-limit" in err_text or "429" in err_text:
+                    saw_quota_error = True
+                    # tenta próximo candidato; se todos falharem, retornaremos 429 amigável
+                    continue
+                # 404 / modelo não encontrado/indisponível para a conta
+                if "NOT_FOUND" in err_text or "is not found" in err_text:
+                    saw_not_found = True
+                    continue
+                # outros erros: propague
+                raise
+
+        if operation is None:
+            if saw_quota_error:
+                return jsonify({"error": "Limite de uso da API atingido. Tente novamente mais tarde."}), 429
+            if saw_not_found:
+                return jsonify({"error": "Modelo indisponível para esta conta/região."}), 404
+            return jsonify({"error": last_err_text or "Falha ao iniciar geração de vídeo"}), 500
 
         # Aguarda conclusão da operação
         while not operation.done:
@@ -81,5 +132,11 @@ def generate_video():
 
     except Exception as e:
         db.session.rollback()
-        print("Erro ao gerar vídeo:", str(e))
-        return jsonify({"error": str(e)}), 500
+        msg = str(e)
+        # Mensagem amigável quando quota estoura
+        if "RESOURCE_EXHAUSTED" in msg or "rate-limit" in msg or "429" in msg:
+            return jsonify({"error": "Limite de uso da API atingido. Tente novamente mais tarde."}), 429
+        if "NOT_FOUND" in msg or "is not found" in msg:
+            return jsonify({"error": "Modelo indisponível para esta conta/região."}), 404
+        print("Erro ao gerar vídeo:", msg)
+        return jsonify({"error": msg}), 500
