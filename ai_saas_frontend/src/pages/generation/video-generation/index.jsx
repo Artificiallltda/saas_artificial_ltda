@@ -40,6 +40,12 @@ function VideoGeneration() {
         body: JSON.stringify({ prompt, model_used: model, ratio }),
       });
 
+      if (res?.error) {
+        toast.error(res.error);
+        setLoading(false);
+        return;
+      }
+
       if (res?.video?.id) {
         const videoRes = await apiFetch(generatedContentRoutes.getVideo(res.video.id), {
           method: "GET",
@@ -50,8 +56,33 @@ function VideoGeneration() {
 
       toast.success("Vídeo gerado com sucesso!");
     } catch (err) {
+      const status =
+        err?.status ??
+        err?.response?.status ??
+        err?.code;
+
+      let msg =
+        err?.data?.error ??
+        err?.body?.error ??
+        err?.error ??
+        err?.message ??
+        "";
+
+      if (!msg && err?.response?.text) {
+        try {
+          const text = await err.response.text();
+          msg = JSON.parse(text)?.error || text;
+        } catch {}
+      }
+
+      if (status === 429 || /RESOURCE_EXHAUSTED|rate[-\s]?limit|quota/i.test(msg)) {
+        toast.error("Limite de uso da API atingido. Tente novamente mais tarde.");
+      } else if (status === 404 || /NOT_FOUND|is not found/i.test(msg)) {
+        toast.error("Modelo indisponível para esta conta/região.");
+      } else {
+        toast.error(msg || "Erro ao gerar vídeo!");
+      }
       console.error(err);
-      toast.error("Erro ao gerar vídeo!");
     } finally {
       setLoading(false);
     }

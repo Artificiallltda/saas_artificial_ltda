@@ -41,6 +41,8 @@ export const IMAGE_MODELS = [
 ];
 
 export const VIDEO_MODELS = [
+  { value: "veo-3.1-generate-preview", label: "Gemini Veo 3.1" },
+  { value: "veo-3.1-fast-generate-preview", label: "Gemini Veo 3.1 Fast (Preview)" },
   { value: "veo-3.0-generate-001", label: "Gemini Veo 3.0" },
   { value: "veo-3.0-fast-generate-001", label: "Gemini Veo 3.0 Fast" },
   { value: "veo-2.0-generate-001", label: "Gemini Veo 2.0" },
