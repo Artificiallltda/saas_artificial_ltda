@@ -6,6 +6,7 @@ import { aiRoutes } from '../../../services/apiRoutes';
 import { apiFetch } from '../../../services/apiService';
 import { TEXT_MODELS } from '../../../utils/constants';
 import Sidebar from "../components/chat/Sidebar";
+import DeepResearchWarning from "../components/chat/DeepResearchWarning";
 import useChats from "../hooks/useChats";
 import { useLanguage } from '../../../context/LanguageContext';
 
@@ -16,6 +17,7 @@ function TextGeneration() {
   const [model, setModel] = useState("gpt-4o");
   const [temperature, setTemperature] = useState(0.7);
   const [loading, setLoading] = useState(false);
+  const [deepResearchLoading, setDeepResearchLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -96,6 +98,12 @@ function TextGeneration() {
     setMessages(prev => [...prev, userMessage]);
     setLoading(true);
 
+    // Verificar se é o modelo Deep Research
+    const isDeepResearch = model === "sonar-deep-research";
+    if (isDeepResearch) {
+      setDeepResearchLoading(true);
+    }
+
     // Chamada real ao backend (substitui o bloco de simulação)
     try {
       const aiData = await apiFetch(aiRoutes.generateText, {
@@ -138,6 +146,7 @@ function TextGeneration() {
       toast.error(err.message || t("generation.text.error_toast"));
     } finally {
       setLoading(false);
+      setDeepResearchLoading(false);
     }
   };
 
@@ -214,6 +223,11 @@ function TextGeneration() {
                     <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
                     <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
                     <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                  </div>
+                )}
+                {deepResearchLoading && (
+                  <div className="flex justify-start">
+                    <DeepResearchWarning />
                   </div>
                 )}
               </div>
