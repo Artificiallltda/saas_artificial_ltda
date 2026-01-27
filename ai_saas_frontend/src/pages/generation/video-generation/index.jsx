@@ -69,8 +69,8 @@ function VideoGeneration() {
   };
 
   const handleGenerate = async () => {
-    if (!prompt.trim()) {
-      toast.warning(t('generation.common.prompt_required'));
+    if (!prompt.trim() && !referenceImage) {
+      toast.warning("Digite um prompt ou anexe uma imagem de referência!");
       return;
     }
 
@@ -78,7 +78,8 @@ function VideoGeneration() {
     const userMessage = {
       id: Date.now(),
       role: 'user',
-      content: prompt
+      content: prompt,
+      ...(referenceImage ? { image: URL.createObjectURL(referenceImage) } : {}),
     };
     
     setMessages(prev => [...prev, userMessage]);
@@ -207,10 +208,15 @@ function VideoGeneration() {
                     : 'bg-gray-100 text-gray-800 rounded-bl-none'
                 }`}
               >
-                {(message.contentKey || message.content) && (
-                  <p className="whitespace-pre-wrap">
-                    {message.contentKey ? t(message.contentKey) : message.content}
-                  </p>
+                {message.content && <p className="whitespace-pre-wrap">{message.content}</p>}
+                {message.image && (
+                  <div className="mt-2">
+                    <img 
+                      src={message.image} 
+                      alt="Imagem enviada" 
+                      className="max-h-48 rounded-lg shadow-md" 
+                    />
+                  </div>
                 )}
                 {message.video && (
                   <div className="mt-2">
@@ -348,7 +354,7 @@ function VideoGeneration() {
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !loading) {
+                    if (e.key === 'Enter' && !e.shiftKey && !loading && (prompt.trim() || referenceImage)) {
                       e.preventDefault();
                       handleGenerate();
                     }
@@ -364,9 +370,9 @@ function VideoGeneration() {
               
               <button
                 onClick={handleGenerate}
-                disabled={loading || !prompt.trim()}
+                disabled={loading || (!prompt.trim() && !referenceImage)}
                 className={`p-3 rounded-xl ${
-                  loading || !prompt.trim()
+                  loading || (!prompt.trim() && !referenceImage)
                     ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                     : 'bg-blue-600 hover:bg-blue-700 text-white'
                 } transition-colors`}
