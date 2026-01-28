@@ -24,15 +24,16 @@ app = Flask(__name__)
 # =========================
 ENV = os.getenv("ENV", "dev").lower()
 DEV_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+PROD_ORIGINS = ["https://artificiall.ai", "https://api.artificiall.ai"]
 
-# =========================
-# CORS (DESENVOLVIMENTO)
-# =========================
-# Ambiente local: habilita CORS para localhost:3000 e ajusta cookies para HTTP
+# Escolhe origens permitidas com base no ambiente
+ALLOWED_ORIGINS = DEV_ORIGINS if ENV == "dev" else PROD_ORIGINS
+
+# Habilita CORS dinamicamente (suporta credenciais em ambos os ambientes)
 CORS(
     app,
     supports_credentials=True,
-    origins=DEV_ORIGINS,
+    origins=ALLOWED_ORIGINS,
     allow_headers=["Content-Type", "X-CSRF-Token", "Authorization"],
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 )
@@ -42,7 +43,7 @@ def handle_options_request():
     if request.method == "OPTIONS":
         response = make_response()
         origin = request.headers.get("Origin")
-        if origin in DEV_ORIGINS:
+        if origin in ALLOWED_ORIGINS:
             response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token, Authorization"
@@ -53,38 +54,12 @@ def handle_options_request():
 @app.after_request
 def add_cors_headers(resp):
     origin = request.headers.get("Origin")
-    if origin in DEV_ORIGINS:
+    if origin in ALLOWED_ORIGINS:
         resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Access-Control-Allow-Credentials"] = "true"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token, Authorization"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     return resp
-
-# =========================
-# CORS/COOKIES (PRODUÇÃO)
-# =========================
-# Caso precisemos rodar em Produção, use este bloco no lugar do bloco de DEV acima:
-#
-# CORS(
-#     app,
-#     supports_credentials=True,
-#     origins=[
-#         "https://artificiall.ai",
-#         "https://api.artificiall.ai"
-#     ],
-#     allow_headers=["Content-Type", "X-CSRF-Token", "Authorization"],
-#     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-# )
-# @app.before_request
-# def handle_options_request_prod():
-#     if request.method == "OPTIONS":
-#         response = make_response()
-#         response.headers["Access-Control-Allow-Origin"] = "https://artificiall.ai"
-#         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-#         response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token, Authorization"
-#         response.headers["Access-Control-Allow-Credentials"] = "true"
-#         response.status_code = 200
-#         return response
 
 # =========================
 # Config do Banco e JWT
@@ -100,15 +75,17 @@ app.config["JWT_ACCESS_COOKIE_PATH"] = "/"
 app.config["JWT_COOKIE_CSRF_PROTECT"] = True
 app.config["JWT_ACCESS_COOKIE_NAME"] = "access_token_cookie"
 
-# Padrão PRODUÇÃO (comentado aqui; ver overrides de DEV abaixo)
-# app.config["JWT_COOKIE_SECURE"] = True
-# app.config["JWT_COOKIE_SAMESITE"] = "None"
-# app.config["JWT_COOKIE_DOMAIN"] = ".artificiall.ai"
-
-# Overrides para DESENVOLVIMENTO (localhost sem HTTPS)
-app.config["JWT_COOKIE_SECURE"] = False
-app.config["JWT_COOKIE_SAMESITE"] = "Lax"
-app.config["JWT_COOKIE_DOMAIN"] = None
+# Configurações de cookie JWT por ambiente
+if ENV == "dev":
+    # Desenvolvimento: sem HTTPS, SameSite Lax, domínio local
+    app.config["JWT_COOKIE_SECURE"] = False
+    app.config["JWT_COOKIE_SAMESITE"] = "Lax"
+    app.config["JWT_COOKIE_DOMAIN"] = None
+else:
+    # Produção: cookies seguros, SameSite None e domínio para subdomínios
+    app.config["JWT_COOKIE_SECURE"] = True
+    app.config["JWT_COOKIE_SAMESITE"] = "None"
+    app.config["JWT_COOKIE_DOMAIN"] = ".artificiall.ai"
 
 # =========================
 # Extensões
