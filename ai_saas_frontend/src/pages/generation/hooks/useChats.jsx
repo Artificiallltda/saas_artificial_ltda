@@ -11,7 +11,22 @@ export default function useChats() {
   useEffect(() => {
     const fetchChats = async () => {
       try {
-        const res = await fetch(chatRoutes.list, { credentials: "include" });
+        const res = await fetch(chatRoutes.list, {
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `Falha ao carregar chats (${res.status})`);
+        }
+
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) {
+          const text = await res.text();
+          throw new Error(text || "Resposta não é JSON");
+        }
+
         const data = await res.json();
         setChats(data || []);
       } catch (err) {
